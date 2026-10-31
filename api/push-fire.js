@@ -2,7 +2,7 @@
 // delayed message on the cue-push topic comes due.
 import { handleCallback } from '@vercel/queue';
 import { read, mutate } from '../lib/store.js';
-import { pingContent, pushAll, schedulePing, focusEndsAt } from '../lib/push.js';
+import { pingContent, pushAll, schedulePing, focusEndsAt, dropGone } from '../lib/push.js';
 import { busyUntil } from '../lib/calendar.js';
 import { localParts } from '../lib/logic.js';
 import { dailyRefresh } from '../lib/tools.js';
@@ -53,6 +53,6 @@ export const POST = handleCallback(async msg => {
     s.push.sent[msg.key] = new Date().toISOString() + (content ? ` sent:${result.sent}` : trial === 'held' ? ' held (trial)' : ' skipped') + (result.errors?.length ? ` err:${result.errors[0]}` : '');
     const cutoff = Date.now() - 3 * 864e5;
     for (const [k, v] of Object.entries(s.push.sent)) if (Date.parse(v.slice(0, 24)) < cutoff) delete s.push.sent[k];
-    if (result.gone.length) s.push.subs = (s.push.subs || []).filter(x => !result.gone.includes(x.endpoint));
+    dropGone(s, result.gone);
   });
 });

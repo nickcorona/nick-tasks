@@ -2,7 +2,8 @@
 import { authorized } from './mcp.js';
 import { read, mutate } from '../lib/store.js';
 import { pushAll, pingContent, schedulePing, pushReady, dayPlan, nowContent, idlePing } from '../lib/push.js';
-import { localParts } from '../lib/logic.js';
+import { localParts, rankTasks } from '../lib/logic.js';
+import { todayView } from '../lib/today.js';
 import { callTool } from '../lib/tools.js';
 
 // The next Now item after a Done, Start or Not now: one read, and the idle check re-armed in
@@ -13,6 +14,15 @@ async function nextNow({ active = false } = {}) {
   const ping = active && idlePing(state);
   if (ping) await schedulePing(ping.key, ping.at).catch(e => console.error('idle ping failed', e.message));
   return nowContent(state, Date.now(), { loud: false });
+}
+
+// Today's list for the widget: what's left in order, then how many are done.
+export function widgetData(state, now = Date.now()) {
+  const day = todayView(state, now);
+  const titles = new Map(rankTasks(state, now).scored.map(x => [x.t.id, x.t]));
+  const today = day.show.map(id => titles.get(id)).filter(Boolean).slice(0, 5)
+    .map(t => ({ id: t.id, title: t.title, est_min: t.est_min || state.settings.default_est_min || 15 }));
+  return { now: nowContent(state, now, { loud: false }), today, done: day.done, total: day.total, mode: day.mode, at: now };
 }
 
 function cookieKey(req) {
@@ -28,9 +38,27 @@ export default async function handler(req, res) {
   if (action === 'key') return res.status(200).json({ publicKey: process.env.VAPID_PUBLIC_KEY || null });
   if (action === 'status') {
     const s = await read();
-    return res.status(200).json({ ready: pushReady(), devices: (s.push?.subs || []).length, recent: s.push?.sent || {} });
+    return res.status(200).json({ ready: pushReady(), devices: (s.push?.subs || []).length + (s.push?.fcm || []).length, recent: s.push?.sent || {} });
   }
+  // The native app's home-screen widget: the Now item plus today's list.
+  if (action === 'widget') return res.status(200).json(widgetData(await read()));
   if (req.method !== 'POST') return res.status(405).end();
+  // The native Android app registers its FCM token (on first launch and whenever it rotates).
+  if (action === 'fcm_register') {
+    const { token, device } = body(req);
+    if (!/^[\w:-]{20,4096}$/.test(token || '')) return res.status(400).json({ error: 'bad token' });
+    await mutate(s => {
+      s.push ||= { subs: [], sent: {} };
+      s.push.fcm = (s.push.fcm || []).filter(x => x.token !== token).slice(-4);
+      s.push.fcm.push({ token, device: String(device || '').slice(0, 80), added: new Date().toISOString() });
+    });
+    return res.status(200).json({ ok: true, ready: pushReady(), next: nowContent(await read(), Date.now(), { loud: false }) });
+  }
+  if (action === 'fcm_unregister') {
+    const { token } = body(req);
+    await mutate(s => { if (s.push?.fcm) s.push.fcm = s.push.fcm.filter(x => x.token !== token); });
+    return res.status(200).json({ ok: true });
+  }
   if (action === 'subscribe') {
     const sub = body(req);
     if (!/^https:\/\//.test(sub?.endpoint || '') || !sub.keys?.p256dh || !sub.keys?.auth) return res.status(400).json({ error: 'bad subscription' });

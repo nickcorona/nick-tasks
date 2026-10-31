@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_desc">The next thing, with Done and Not now, and what\'s left of today</string>
+    <string name="capture">Capture</string>
+</resources>
